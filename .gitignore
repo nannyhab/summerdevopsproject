@@ -1,0 +1,12 @@
+# Terraform working files and state (state lives in S3)
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfvars
+tfplan
+# Generated every session
+ansible/inventory.ini
+kubeconfig
+# Never commit keys or secrets
+*.pem
+.env
