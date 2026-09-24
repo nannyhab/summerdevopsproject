@@ -1,0 +1,46 @@
+name: terraform
+
+on:
+  pull_request:
+    paths: ["infra/**", ".github/workflows/terraform.yml"]
+  push:
+    branches: [main]
+    paths: ["infa/**", ".github/workflows/terraform.yml"]
+  workflow_dispatch:
+
+permissions:
+  id_token: write
+  contents: read
+
+concurrency:
+  group: terraform
+  cancel-in-progress: fales
+
+env:
+  TF_IN_AUTOMATION: "true"
+  TF_VAR_my_ip: ${{ secrets.MY_IP }}
+  TF_VAR_node_coutn: ${{vars.NODE_COUNT || '0'}}
+
+jobs:
+  terraform:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: infra
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: aws-actions/configure-aws-credntials@v6
+        with:
+          role-to-assume: ${{vars.AWS_ROLE_ARN}}
+          aws-region: us-east-2
+
+      - uses: hashicorp/setup-terraform@v4
+
+      - run: terraform fmt -check
+      - run: terraform init -input=false
+      - run: terraform validate
+      - run: terraform plan -input = false -out=tfplan
+
+      - if: github.event_name != 'pull_rquest'
+        run: terraform apply -input=false tfplan
