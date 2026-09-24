@@ -126,3 +126,40 @@ resource "aws_key_pair" "me" {
     key_name   = "cluster-week"
     public_key = file("${path.module}/cluster-week.pub")
 }
+
+resource "aws_instance" "node" {
+    count = var.node_count
+    ami = data.aws_ssm_parameter.ubuntu.insecure_value
+    instance_type = "t4g.small"
+    subnet_id = aws_subnet.public.id
+    vpc_security_group_ids = [aws_security_group.nodes.id]
+    key_name = aws_key_pair.me.key_name
+    iam_instance_profile = aws_iam_instance_profile.node.name
+
+
+root_block_device {
+    volume_size = 20
+    volume_type = "gp3"
+}
+
+metadata_options {
+    http_tokens = "required"
+}
+
+tags = {
+    Name = count.index == 0 ? "k3s-server" : "k3s-agent-${count.index}" }
+}
+
+resource "aws_ecr_repository" "web" {
+    name = "cluster-week/web"
+    image_tag_mutability = "IMMUTABLE"
+    force_delete = true
+    image_scanning_configuration {
+        scan_on_push = true
+    }
+}
+
+output "node_public_ips" {value = aws_instance.node[*].public_ip}
+output "node_private_ips" {value = aws_instance.node[*].private_ip}
+output "ecr_url" {value = aws_ecr_repository.web.repository_url}
+
