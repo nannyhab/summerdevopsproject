@@ -78,3 +78,51 @@ resource "aws_vpc_security_group_ingress_rule" "ssh_from_me" {
     to_port           = 22
 }
 
+resource "aws_vpc_security_group_ingress_rule" "kubeapi_from_me" {
+  security_group_id = aws_security_group.nodes.id
+  cidr_ipv4         = var.my_ip
+  ip_protocol       = "tcp"
+  from_port         = 6443
+  to_port           = 6443
+}
+
+resource "aws_vpc_security_group_ingress_rule" "node_to_node" {
+  security_group_id            = aws_security_group.nodes.id
+  referenced_security_group_id = aws_security_group.nodes.id
+  ip_protocol                  = "-1"
+}
+
+resource "aws_vpc_security_group_egress_rule" "all_out" {
+  security_group_id = aws_security_group.nodes.id
+  cidr_ipv4         = "0.0.0.0/0"
+  ip_protocol       = "-1"
+}
+
+resource "aws_iam_role" "node" {
+    name = "cluster-week-node"
+    assume_role_policy = jsonencode({
+        Version = "2012-10-17"
+        Statement = [
+            {
+                Action = "sts:AssumeRole"
+                Effect = "Allow"
+                Principal = { Service = "ec2.amazonaws.com" }
+            }
+        ]
+    })
+}
+
+resource "aws_iam_role_policy_attachment" "ecr_pull" {
+    role    = aws_iam_role.node.name
+    policy_arn = "arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryPullOnly"
+}
+
+resource "aws_iam_instance_profile" "node" {
+    name = "cluster-week-node"
+    role = aws_iam_role.node.name
+}
+
+resource "aws_key_pair" "me" {
+    key_name   = "cluster-week"
+    public_key = file("${path.module}/cluster-week.pub")
+}
