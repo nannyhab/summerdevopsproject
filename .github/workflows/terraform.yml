@@ -9,12 +9,12 @@ on:
   workflow_dispatch:
 
 permissions:
-  id_token: write
+  id-token: write
   contents: read
 
 concurrency:
   group: terraform
-  cancel-in-progress: fales
+  cancel-in-progress: false
 
 env:
   TF_IN_AUTOMATION: "true"
