@@ -5,21 +5,21 @@ on:
     paths: ["infra/**", ".github/workflows/terraform.yml"]
   push:
     branches: [main]
-    paths: ["infa/**", ".github/workflows/terraform.yml"]
-  workflow_dispatch:
+    paths: ["infra/**", ".github/workflows/terraform.yml"]
+  workflow_dispatch: # the "Run workflow" button, used by up.sh and down.sh
 
 permissions:
-  id-token: write
+  id-token: write # lets the job ask GitHub for an OIDC token
   contents: read
 
 concurrency:
-  group: terraform
+  group: terraform # one run at a time, queued, never cancelled mid-apply
   cancel-in-progress: false
 
 env:
   TF_IN_AUTOMATION: "true"
   TF_VAR_my_ip: ${{ secrets.MY_IP }}
-  TF_VAR_node_coutn: ${{vars.NODE_COUNT || '0'}}
+  TF_VAR_node_count: ${{ vars.NODE_COUNT || '0' }}
 
 jobs:
   terraform:
@@ -30,9 +30,9 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - uses: aws-actions/configure-aws-credntials@v6
+      - uses: aws-actions/configure-aws-credentials@v6
         with:
-          role-to-assume: ${{vars.AWS_ROLE_ARN}}
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
           aws-region: us-east-2
 
       - uses: hashicorp/setup-terraform@v4
@@ -40,7 +40,8 @@ jobs:
       - run: terraform fmt -check
       - run: terraform init -input=false
       - run: terraform validate
-      - run: terraform plan -input = false -out=tfplan
+      - run: terraform plan -input=false -out=tfplan
 
-      - if: github.event_name != 'pull_rquest'
+      # Pull requests stop at the plan. Main and the button go on to apply.
+      - if: github.event_name != 'pull_request'
         run: terraform apply -input=false tfplan
