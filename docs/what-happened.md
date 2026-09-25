@@ -25,3 +25,7 @@ A NetworkPolicy (a firewall rule inside the cluster) cut one web pod off from th
 ## 6. Watching it with Prometheus
 
 I installed kube-prometheus-stack with Helm. It bundles Prometheus (collects and stores numbers over time), Alertmanager (handles alerts), kube-state-metrics (turns Kubernetes objects into numbers) and node-exporter (server stats). Grafana and the scrape jobs for control-plane parts that k3s hides were switched off, so everything fits in 2 GiB per server. A ServiceMonitor tells Prometheus to scrape the app's `/metrics`, and a PrometheusRule adds two alerts: one when more than 5% of API requests fail, and one when no web pod is ready. Prometheus confirmed both web pods as healthy scrape targets.
+
+## 7. Fixing it and proving the fix
+
+I changed `/readyz` so it opens a real database connection with a two-second timeout and answers 503 if that fails. After committing, `push.sh` built a new image tagged with the new commit hash, and `kubectl set image` rolled it out one pod at a time. Repeating the same experiment, the cut-off pod was marked not ready after 6 seconds and taken out of rotation. Only 3 requests failed, and the next 30 seconds were all 200s. Then I scaled Postgres to zero: both pods went not ready and Prometheus fired the `WebNoReadyPods` alert within a minute. The proof is in [evidence/after.md](evidence/after.md).
