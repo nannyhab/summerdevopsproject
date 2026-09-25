@@ -1,0 +1,221 @@
+- name: Prepare every node
+  hosts: all
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Wait for SSH
+      ansible.builtin.wait_for_connection:
+        timeout: 300
+
+    - name: Gather facts
+      ansible.builtin.setup:
+
+    - name: Wait for cloud-init to finish
+      ansible.builtin.command: cloud-init status --wait
+      register: cloud_init
+      changed_when: false
+      failed_when: cloud_init.rc not in [0, 2]
+
+    - name: Refresh the package index
+      ansible.builtin.apt:
+        update_cache: true
+        cache_valid_time: 3600
+        lock_timeout: 600
+
+    - name: Apply security updates
+      ansible.builtin.command: unattended-upgrade -v
+      register: security_updates
+      changed_when: "'Packages that will be upgraded' in (security_updates.stdout ~ security_updates.stderr)"
+      retries: 5
+      delay: 30
+      until: security_updates.rc == 0
+
+    - name: Install basic tools
+      ansible.builtin.apt:
+        name: [curl, jq, unzip]
+        state: present
+        lock_timeout: 600
+
+    - name: Set the hostname
+      ansible.builtin.hostname:
+        name: "{{ inventory_hostname }}"
+
+    - name: Resolve the hostname locally
+      ansible.builtin.lineinfile:
+        path: /etc/hosts
+        regexp: '^127\.0\.1\.1\s'
+        line: "127.0.1.1 {{ inventory_hostname }}"
+
+    - name: Stop cloud-init from resetting the hostname
+      ansible.builtin.copy:
+        dest: /etc/cloud/cloud.cfg.d/99-keep-hostname.cfg
+        content: "preserve_hostname: true\n"
+        mode: "0644"
+
+    - name: Disable password and root logins over SSH
+      ansible.builtin.copy:
+        dest: /etc/ssh/sshd_config.d/10-hardening.conf
+        content: |
+          PasswordAuthentication no
+          KbdInteractiveAuthentication no
+          PermitRootLogin no
+        mode: "0644"
+        validate: /usr/sbin/sshd -t -f %s
+      notify: Reload sshd
+
+  handlers:
+    - name: Reload sshd
+      ansible.builtin.systemd_service:
+        name: ssh
+        state: reloaded
+
+- name: Install the k3s server
+  hosts: server
+  become: true
+  vars:
+    k3s_version: v1.36.4+k3s1
+  tasks:
+    - name: Install k3s
+      ansible.builtin.shell: >-
+        curl -sfL https://get.k3s.io |
+        INSTALL_K3S_VERSION={{ k3s_version }}
+        INSTALL_K3S_EXEC="server --disable traefik --tls-san {{ ansible_host }} --write-kubeconfig-mode 644"
+        sh -
+      args:
+        creates: /usr/local/bin/k3s
+
+    - name: Wait for the join token
+      ansible.builtin.wait_for:
+        path: /var/lib/rancher/k3s/server/node-token
+
+    - name: Wait for the kubeconfig
+      ansible.builtin.wait_for:
+        path: /etc/rancher/k3s/k3s.yaml
+
+    - name: Read the join token
+      ansible.builtin.slurp:
+        src: /var/lib/rancher/k3s/server/node-token
+      register: node_token
+      no_log: true
+
+    - name: Remember the join token
+      ansible.builtin.set_fact:
+        k3s_token: "{{ node_token.content | b64decode | trim }}"
+      no_log: true
+
+    - name: Read the kubeconfig
+      ansible.builtin.slurp:
+        src: /etc/rancher/k3s/k3s.yaml
+      register: server_kubeconfig
+      no_log: true
+
+    - name: Save the kubeconfig to the repo root
+      ansible.builtin.copy:
+        dest: "{{ playbook_dir }}/../kubeconfig"
+        content: "{{ server_kubeconfig.content | b64decode | replace('127.0.0.1', ansible_host) }}"
+        mode: "0600"
+      delegate_to: localhost
+      become: false
+      no_log: true
+
+- name: Join the agent nodes
+  hosts: agents
+  become: true
+  vars:
+    k3s_version: v1.36.4+k3s1
+    server: "{{ hostvars[groups['server'][0]] }}"
+  tasks:
+    - name: Install the k3s agent
+      ansible.builtin.shell: >-
+        curl -sfL https://get.k3s.io |
+        INSTALL_K3S_VERSION={{ k3s_version }}
+        K3S_URL=https://{{ server.private_ip }}:6443
+        K3S_TOKEN={{ server.k3s_token }}
+        sh -
+      args:
+        creates: /usr/local/bin/k3s
+      no_log: true
+
+- name: Let every node pull from ECR
+  hosts: all
+  become: true
+  vars:
+    k3s_service: "{{ 'k3s' if inventory_hostname in groups['server'] else 'k3s-agent' }}"
+  tasks:
+    - name: Install the AWS CLI
+      ansible.builtin.shell: |
+        set -e
+        cd /tmp
+        curl -sSfo awscliv2.zip "https://awscli.amazonaws.com/awscli-exe-linux-{{ ansible_facts['architecture'] }}.zip"
+        unzip -q -o awscliv2.zip
+        ./aws/install
+        rm -rf aws awscliv2.zip
+      args:
+        creates: /usr/local/bin/aws
+        executable: /bin/bash
+
+    - name: Write the ECR token refresh script
+      ansible.builtin.copy:
+        dest: /usr/local/sbin/ecr-registry-refresh
+        mode: "0755"
+        content: |
+          #!/bin/bash
+          set -euo pipefail
+          token="$(/usr/local/bin/aws ecr get-login-password --region {{ aws_region }})"
+          mkdir -p /etc/rancher/k3s
+          umask 077
+          tmp="$(mktemp /etc/rancher/k3s/.registries.XXXXXX)"
+          printf 'configs:\n  "%s":\n    auth:\n      username: AWS\n      password: "%s"\n' "{{ ecr_registry }}" "$token" > "$tmp"
+          chmod 600 "$tmp"
+          mv "$tmp" /etc/rancher/k3s/registries.yaml
+          systemctl restart {{ k3s_service }}
+
+    - name: Add the refresh service
+      ansible.builtin.copy:
+        dest: /etc/systemd/system/ecr-registry-refresh.service
+        mode: "0644"
+        content: |
+          [Unit]
+          Description=Refresh the ECR login for k3s
+          Wants=network-online.target
+          After=network-online.target
+
+          [Service]
+          Type=oneshot
+          ExecStart=/usr/local/sbin/ecr-registry-refresh
+      notify: Reload systemd
+
+    - name: Add the refresh timer
+      ansible.builtin.copy:
+        dest: /etc/systemd/system/ecr-registry-refresh.timer
+        mode: "0644"
+        content: |
+          [Unit]
+          Description=Refresh the ECR login for k3s every six hours
+
+          [Timer]
+          OnCalendar=*-*-* 00/6:00:00
+          Persistent=true
+
+          [Install]
+          WantedBy=timers.target
+      notify: Reload systemd
+
+    - name: Apply systemd changes now
+      ansible.builtin.meta: flush_handlers
+
+    - name: Enable the refresh timer
+      ansible.builtin.systemd_service:
+        name: ecr-registry-refresh.timer
+        enabled: true
+        state: started
+
+    - name: Log in to ECR for the first time
+      ansible.builtin.command: /usr/local/sbin/ecr-registry-refresh
+      args:
+        creates: /etc/rancher/k3s/registries.yaml
+
+  handlers:
+    - name: Reload systemd
+      ansible.builtin.systemd_service:
+        daemon_reload: true
