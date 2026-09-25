@@ -146,6 +146,10 @@ resource "aws_instance" "node" {
     http_tokens = "required"
   }
 
+  lifecycle {
+    ignore_changes = [ami]
+  }
+
   tags = {
   Name = count.index == 0 ? "k3s-server" : "k3s-agent-${count.index}" }
 }
