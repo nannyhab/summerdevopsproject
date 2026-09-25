@@ -1,6 +1,6 @@
 variable "github_repo" {
   type    = string
-  default = "nannyhabers/summerdevopsproject"
+  default = "nannyhab@93690965/summerdevopsproject@1380848155" # GitHub sends repo IDs in the OIDC subject
 }
 
 resource "aws_iam_openid_connect_provider" "github" {
