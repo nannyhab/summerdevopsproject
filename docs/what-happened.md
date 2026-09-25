@@ -21,3 +21,7 @@ The app is a small Flask web service. `/api` asks Postgres for the current time,
 ## 5. Breaking it on purpose
 
 A NetworkPolicy (a firewall rule inside the cluster) cut one web pod off from the database, while a load pod called the API twice a second. About half the requests failed with 500 errors, yet Kubernetes still showed both pods as Ready and kept sending traffic to the broken one. The reason is that `/readyz` said "ok" without checking anything. The proof is in [evidence/before.md](evidence/before.md).
+
+## 6. Watching it with Prometheus
+
+I installed kube-prometheus-stack with Helm. It bundles Prometheus (collects and stores numbers over time), Alertmanager (handles alerts), kube-state-metrics (turns Kubernetes objects into numbers) and node-exporter (server stats). Grafana and the scrape jobs for control-plane parts that k3s hides were switched off, so everything fits in 2 GiB per server. A ServiceMonitor tells Prometheus to scrape the app's `/metrics`, and a PrometheusRule adds two alerts: one when more than 5% of API requests fail, and one when no web pod is ready. Prometheus confirmed both web pods as healthy scrape targets.
