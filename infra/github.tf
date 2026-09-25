@@ -1,6 +1,6 @@
 variable "github_repo" {
   type    = string
-  default = "nannyhabers/summerdevopsproject"
+  default = "nannyhab/summerdevopsproject"
 }
 
 resource "aws_iam_openid_connect_provider" "github" {
