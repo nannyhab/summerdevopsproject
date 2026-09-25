@@ -1,0 +1,27 @@
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: web
+  namespace: demo
+  labels:
+    release: monitoring
+spec:
+  groups:
+    - name: web
+      rules:
+        - alert: WebHighErrorRatio
+          expr: |
+            sum(rate(web_requests_total{namespace="demo", status=~"5.."}[2m]))
+              / sum(rate(web_requests_total{namespace="demo"}[2m])) > 0.05
+          for: 2m
+          labels:
+            severity: warning
+          annotations:
+            summary: More than 5% of web API requests are failing.
+        - alert: WebNoReadyPods
+          expr: kube_deployment_status_replicas_available{namespace="demo", deployment="web"} == 0
+          for: 30s
+          labels:
+            severity: critical
+          annotations:
+            summary: No web pod is ready to take traffic.
