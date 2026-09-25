@@ -38,6 +38,11 @@ def healthz():
 
 @app.get("/readyz")
 def readyz():
+    try:
+        with connect():
+            pass
+    except psycopg.Error:
+        return "database unreachable", 503
     return "ok"
 
 
